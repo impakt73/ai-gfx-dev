@@ -21,7 +21,7 @@ mod dx12 {
                 Direct3D::{
                     D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
                     D3D_FEATURE_LEVEL_12_0, D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_2,
-                    ID3DBlob, ID3D12CommandList,
+                    ID3DBlob,
                 },
                 Direct3D12::{
                     D3D_HIGHEST_SHADER_MODEL, D3D_ROOT_SIGNATURE_VERSION_1, D3D_SHADER_MODEL,
@@ -30,15 +30,15 @@ mod dx12 {
                     D3D_SHADER_MODEL_6_5, D3D_SHADER_MODEL_6_6, D3D_SHADER_MODEL_6_7,
                     D3D_SHADER_MODEL_6_8, D3D_SHADER_MODEL_6_9, D3D12_COMMAND_LIST_TYPE_DIRECT,
                     D3D12_COMMAND_QUEUE_DESC, D3D12_COMPUTE_PIPELINE_STATE_DESC,
-                    D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_DESCRIPTOR_HEAP_DESC,
-                    D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                    D3D12_FENCE_FLAG_NONE, D3D12_FEATURE, D3D12_FEATURE_ARCHITECTURE1,
-                    D3D12_FEATURE_D3D12_OPTIONS, D3D12_FEATURE_D3D12_OPTIONS1,
-                    D3D12_FEATURE_D3D12_OPTIONS5, D3D12_FEATURE_D3D12_OPTIONS7,
-                    D3D12_FEATURE_DATA_ARCHITECTURE1, D3D12_FEATURE_DATA_D3D12_OPTIONS,
-                    D3D12_FEATURE_DATA_D3D12_OPTIONS1, D3D12_FEATURE_DATA_D3D12_OPTIONS5,
-                    D3D12_FEATURE_DATA_D3D12_OPTIONS7, D3D12_FEATURE_DATA_SHADER_MODEL,
-                    D3D12_FEATURE_SHADER_MODEL, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES,
+                    D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
+                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_FENCE_FLAG_NONE,
+                    D3D12_FEATURE, D3D12_FEATURE_ARCHITECTURE1, D3D12_FEATURE_D3D12_OPTIONS,
+                    D3D12_FEATURE_D3D12_OPTIONS1, D3D12_FEATURE_D3D12_OPTIONS5,
+                    D3D12_FEATURE_D3D12_OPTIONS7, D3D12_FEATURE_DATA_ARCHITECTURE1,
+                    D3D12_FEATURE_DATA_D3D12_OPTIONS, D3D12_FEATURE_DATA_D3D12_OPTIONS1,
+                    D3D12_FEATURE_DATA_D3D12_OPTIONS5, D3D12_FEATURE_DATA_D3D12_OPTIONS7,
+                    D3D12_FEATURE_DATA_SHADER_MODEL, D3D12_FEATURE_SHADER_MODEL,
+                    D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE,
                     D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_READBACK, D3D12_MESH_SHADER_TIER,
                     D3D12_MESH_SHADER_TIER_1, D3D12_MESH_SHADER_TIER_NOT_SUPPORTED,
                     D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RAYTRACING_TIER,
@@ -49,15 +49,16 @@ mod dx12 {
                     D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_BUFFER,
                     D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
                     D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
-                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_TRANSITION_BARRIER,
-                    D3D12_ROOT_SIGNATURE_DESC,
+                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATES,
+                    D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_ROOT_SIGNATURE_DESC,
                     D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED,
                     D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED, D3D12_SHADER_BYTECODE,
                     D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
                     D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
                     D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12CreateDevice,
-                    D3D12SerializeRootSignature, ID3D12DescriptorHeap, ID3D12Device,
-                    ID3D12Fence, ID3D12GraphicsCommandList, ID3D12PipelineState, ID3D12Resource,
+                    D3D12SerializeRootSignature, ID3D12CommandAllocator, ID3D12CommandList,
+                    ID3D12CommandQueue, ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence,
+                    ID3D12GraphicsCommandList, ID3D12PipelineState, ID3D12Resource,
                     ID3D12RootSignature,
                 },
                 Dxgi::{
@@ -66,7 +67,7 @@ mod dx12 {
                 },
             },
         },
-        core::{Error, Result},
+        core::{Error, Interface, Result},
     };
 
     const COMPUTE_SHADER_PROFILE: &str = "cs_6_6";
@@ -423,6 +424,7 @@ mod dx12 {
             ..Default::default()
         };
 
+        let mut texture = None;
         unsafe {
             device.CreateCommittedResource(
                 &default_heap_properties(D3D12_HEAP_TYPE_DEFAULT),
@@ -430,8 +432,10 @@ mod dx12 {
                 &texture_desc,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                 None,
-            )
+                &mut texture,
+            )?;
         }
+        Ok(texture.expect("CreateCommittedResource returned no texture"))
     }
 
     fn create_readback_buffer(device: &ID3D12Device, size_in_bytes: u64) -> Result<ID3D12Resource> {
@@ -449,6 +453,7 @@ mod dx12 {
             ..Default::default()
         };
 
+        let mut readback_buffer = None;
         unsafe {
             device.CreateCommittedResource(
                 &default_heap_properties(D3D12_HEAP_TYPE_READBACK),
@@ -456,11 +461,13 @@ mod dx12 {
                 &buffer_desc,
                 D3D12_RESOURCE_STATE_COPY_DEST,
                 None,
-            )
+                &mut readback_buffer,
+            )?;
         }
+        Ok(readback_buffer.expect("CreateCommittedResource returned no readback buffer"))
     }
 
-    fn create_command_queue(device: &ID3D12Device) -> Result<windows::Win32::Graphics::Direct3D12::ID3D12CommandQueue> {
+    fn create_command_queue(device: &ID3D12Device) -> Result<ID3D12CommandQueue> {
         let queue_desc = D3D12_COMMAND_QUEUE_DESC {
             Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
             ..Default::default()
@@ -470,13 +477,13 @@ mod dx12 {
 
     fn create_command_allocator(
         device: &ID3D12Device,
-    ) -> Result<windows::Win32::Graphics::Direct3D12::ID3D12CommandAllocator> {
+    ) -> Result<ID3D12CommandAllocator> {
         unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
     }
 
     fn create_command_list(
         device: &ID3D12Device,
-        command_allocator: &windows::Win32::Graphics::Direct3D12::ID3D12CommandAllocator,
+        command_allocator: &ID3D12CommandAllocator,
     ) -> Result<ID3D12GraphicsCommandList> {
         unsafe {
             device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocator, None)
@@ -527,7 +534,7 @@ mod dx12 {
     }
 
     fn default_heap_properties(
-        heap_type: windows::Win32::Graphics::Direct3D12::D3D12_HEAP_TYPE,
+        heap_type: D3D12_HEAP_TYPE,
     ) -> D3D12_HEAP_PROPERTIES {
         D3D12_HEAP_PROPERTIES {
             Type: heap_type,
@@ -537,8 +544,8 @@ mod dx12 {
 
     fn transition_resource_barrier(
         resource: &ID3D12Resource,
-        state_before: windows::Win32::Graphics::Direct3D12::D3D12_RESOURCE_STATES,
-        state_after: windows::Win32::Graphics::Direct3D12::D3D12_RESOURCE_STATES,
+        state_before: D3D12_RESOURCE_STATES,
+        state_after: D3D12_RESOURCE_STATES,
     ) -> D3D12_RESOURCE_BARRIER {
         D3D12_RESOURCE_BARRIER {
             Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
@@ -808,6 +815,14 @@ mod tests {
             }
         }
 
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn compiles_checkerboard_compute_shader_at_runtime() -> windows::core::Result<()> {
+        let compiled_shader = super::dx12::compile_runtime_checkerboard_compute_shader()?;
+        assert!(!compiled_shader.is_empty());
         Ok(())
     }
 
