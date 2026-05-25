@@ -13,7 +13,8 @@ unsafe extern "system" {}
 
 fn main() {
     println!("cargo:rerun-if-changed={COMPUTE_SHADER_SOURCE_PATH}");
-    println!("cargo:rerun-if-env-changed=DXC_LIB_DIR");
+    println!("cargo:rerun-if-changed=third_party/dxc/bin/x64/dxcompiler.dll");
+    println!("cargo:rerun-if-changed=third_party/dxc/bin/x64/dxil.dll");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("cargo did not provide OUT_DIR"));
     let output_path = out_dir.join(BUILD_TIME_COMPUTE_SHADER_NAME);
