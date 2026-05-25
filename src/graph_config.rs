@@ -267,7 +267,10 @@ impl ComputeGraphConfig {
 
         for buffer in &self.buffers {
             if resources
-                .insert(buffer.name.clone(), ResourceDefinition::Buffer(buffer.clone()))
+                .insert(
+                    buffer.name.clone(),
+                    ResourceDefinition::Buffer(buffer.clone()),
+                )
                 .is_some()
             {
                 return Err(GraphConfigError::DuplicateResource(buffer.name.clone()));
@@ -302,16 +305,24 @@ impl fmt::Display for GraphConfigError {
             Self::DuplicateResource(resource) => {
                 write!(f, "resource '{resource}' is defined more than once")
             }
-            Self::DuplicateNode(node) => write!(f, "compute node '{node}' is defined more than once"),
+            Self::DuplicateNode(node) => {
+                write!(f, "compute node '{node}' is defined more than once")
+            }
             Self::DuplicateNodeResourceBinding { node, resource } => write!(
                 f,
                 "compute node '{node}' binds resource '{resource}' more than once"
             ),
             Self::DuplicateNodeBindingSlot { node, slot } => {
-                write!(f, "compute node '{node}' binds descriptor slot {slot} more than once")
+                write!(
+                    f,
+                    "compute node '{node}' binds descriptor slot {slot} more than once"
+                )
             }
             Self::UnknownResource { node, resource } => {
-                write!(f, "compute node '{node}' references unknown resource '{resource}'")
+                write!(
+                    f,
+                    "compute node '{node}' references unknown resource '{resource}'"
+                )
             }
         }
     }
