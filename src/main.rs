@@ -16,7 +16,8 @@ mod dx12 {
     };
     use windows::{
         Win32::{
-            Foundation::E_FAIL,
+            Foundation::{CloseHandle, E_FAIL},
+            System::Threading::{CreateEventA, INFINITE, WaitForSingleObject},
             Graphics::{
                 Direct3D::{
                     D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
@@ -271,8 +272,8 @@ mod dx12 {
         let descriptor_heaps = [Some(descriptor_heap.clone())];
 
         unsafe {
-            command_list.SetComputeRootSignature(&root_signature);
             command_list.SetDescriptorHeaps(&descriptor_heaps);
+            command_list.SetComputeRootSignature(&root_signature);
             command_list.SetPipelineState(&pipeline_state);
             command_list.Dispatch(1, 1, 1);
 
@@ -296,7 +297,7 @@ mod dx12 {
             command_queue.Signal(&fence, 1)?;
         }
 
-        wait_for_fence(&fence, 1);
+        wait_for_fence(&fence, 1)?;
         readback_texture(
             &readback_buffer,
             &placed_footprint,
@@ -494,10 +495,14 @@ mod dx12 {
         unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
     }
 
-    fn wait_for_fence(fence: &ID3D12Fence, value: u64) {
-        while unsafe { fence.GetCompletedValue() } < value {
-            std::thread::yield_now();
+    fn wait_for_fence(fence: &ID3D12Fence, value: u64) -> Result<()> {
+        if unsafe { fence.GetCompletedValue() } < value {
+            let event = unsafe { CreateEventA(None, false, false, None)? };
+            unsafe { fence.SetEventOnCompletion(value, event)? };
+            unsafe { WaitForSingleObject(event, INFINITE) };
+            unsafe { CloseHandle(event)? };
         }
+        Ok(())
     }
 
     fn readback_texture(
