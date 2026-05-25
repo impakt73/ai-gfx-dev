@@ -1,4 +1,5 @@
 mod dxc_locator;
+mod graph_config;
 
 #[cfg(target_os = "windows")]
 #[link(name = "Advapi32")]
@@ -6,18 +7,22 @@ unsafe extern "system" {}
 
 #[cfg(target_os = "windows")]
 mod dx12 {
-    use crate::dxc_locator::find_dxc_library;
+    use crate::{
+        dxc_locator::find_dxc_library,
+        graph_config::{
+            ExecutionPlan, ImageFormat, PlannedBarrier, PlannedResourceState, ResourceDefinition,
+        },
+    };
     use hassle_rs::Dxc;
     use std::{
+        collections::BTreeMap,
         fmt,
         mem::{ManuallyDrop, size_of},
-        ptr,
-        slice,
+        ptr, slice,
     };
     use windows::{
         Win32::{
             Foundation::{CloseHandle, E_FAIL},
-            System::Threading::{CreateEventA, INFINITE, WaitForSingleObject},
             Graphics::{
                 Direct3D::{
                     D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
@@ -29,44 +34,54 @@ mod dx12 {
                     D3D_SHADER_MODEL_5_1, D3D_SHADER_MODEL_6_0, D3D_SHADER_MODEL_6_1,
                     D3D_SHADER_MODEL_6_2, D3D_SHADER_MODEL_6_3, D3D_SHADER_MODEL_6_4,
                     D3D_SHADER_MODEL_6_5, D3D_SHADER_MODEL_6_6, D3D_SHADER_MODEL_6_7,
-                    D3D_SHADER_MODEL_6_8, D3D_SHADER_MODEL_6_9, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                    D3D12_COMMAND_QUEUE_DESC, D3D12_COMPUTE_PIPELINE_STATE_DESC,
+                    D3D_SHADER_MODEL_6_8, D3D_SHADER_MODEL_6_9, D3D12_BUFFER_SRV,
+                    D3D12_BUFFER_SRV_FLAG_NONE, D3D12_BUFFER_UAV, D3D12_BUFFER_UAV_FLAG_NONE,
+                    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
+                    D3D12_COMPUTE_PIPELINE_STATE_DESC, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
                     D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
-                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_FENCE_FLAG_NONE,
-                    D3D12_FEATURE, D3D12_FEATURE_ARCHITECTURE1, D3D12_FEATURE_D3D12_OPTIONS,
+                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_FEATURE,
+                    D3D12_FEATURE_ARCHITECTURE1, D3D12_FEATURE_D3D12_OPTIONS,
                     D3D12_FEATURE_D3D12_OPTIONS1, D3D12_FEATURE_D3D12_OPTIONS5,
                     D3D12_FEATURE_D3D12_OPTIONS7, D3D12_FEATURE_DATA_ARCHITECTURE1,
                     D3D12_FEATURE_DATA_D3D12_OPTIONS, D3D12_FEATURE_DATA_D3D12_OPTIONS1,
                     D3D12_FEATURE_DATA_D3D12_OPTIONS5, D3D12_FEATURE_DATA_D3D12_OPTIONS7,
                     D3D12_FEATURE_DATA_SHADER_MODEL, D3D12_FEATURE_SHADER_MODEL,
-                    D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE,
-                    D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_READBACK, D3D12_MESH_SHADER_TIER,
-                    D3D12_MESH_SHADER_TIER_1, D3D12_MESH_SHADER_TIER_NOT_SUPPORTED,
-                    D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RAYTRACING_TIER,
-                    D3D12_RAYTRACING_TIER_1_0, D3D12_RAYTRACING_TIER_1_1,
+                    D3D12_FENCE_FLAG_NONE, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES,
+                    D3D12_HEAP_TYPE, D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_READBACK,
+                    D3D12_MESH_SHADER_TIER, D3D12_MESH_SHADER_TIER_1,
+                    D3D12_MESH_SHADER_TIER_NOT_SUPPORTED, D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
+                    D3D12_RAYTRACING_TIER, D3D12_RAYTRACING_TIER_1_0, D3D12_RAYTRACING_TIER_1_1,
                     D3D12_RAYTRACING_TIER_NOT_SUPPORTED, D3D12_RESOURCE_BARRIER,
                     D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
                     D3D12_RESOURCE_BARRIER_FLAG_NONE, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-                    D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_BUFFER,
-                    D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-                    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
+                    D3D12_RESOURCE_BARRIER_TYPE_UAV, D3D12_RESOURCE_DESC,
+                    D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+                    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST,
+                    D3D12_RESOURCE_STATE_COPY_SOURCE,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATES,
-                    D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_ROOT_SIGNATURE_DESC,
+                    D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_RESOURCE_UAV_BARRIER,
+                    D3D12_ROOT_SIGNATURE_DESC,
                     D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED,
                     D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED, D3D12_SHADER_BYTECODE,
+                    D3D12_SHADER_RESOURCE_VIEW_DESC, D3D12_SRV_DIMENSION_BUFFER,
+                    D3D12_SRV_DIMENSION_TEXTURE2D, D3D12_TEX2D_SRV, D3D12_TEX2D_UAV,
                     D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
-                    D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-                    D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12CreateDevice,
-                    D3D12SerializeRootSignature, ID3D12CommandAllocator, ID3D12CommandList,
-                    ID3D12CommandQueue, ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence,
-                    ID3D12GraphicsCommandList, ID3D12PipelineState, ID3D12Resource,
+                    D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+                    D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                    D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12_UAV_DIMENSION_BUFFER,
+                    D3D12_UAV_DIMENSION_TEXTURE2D, D3D12_UNORDERED_ACCESS_VIEW_DESC,
+                    D3D12CreateDevice, D3D12SerializeRootSignature, ID3D12CommandAllocator,
+                    ID3D12CommandList, ID3D12CommandQueue, ID3D12DescriptorHeap, ID3D12Device,
+                    ID3D12Fence, ID3D12GraphicsCommandList, ID3D12PipelineState, ID3D12Resource,
                     ID3D12RootSignature,
                 },
                 Dxgi::{
-                    Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
+                    Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC},
                     CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, IDXGIAdapter4, IDXGIFactory4,
                 },
             },
+            System::Threading::{CreateEventA, INFINITE, WaitForSingleObject},
         },
         core::{Error, Interface, Result},
     };
@@ -83,9 +98,19 @@ mod dx12 {
         env!("OUT_DIR"),
         "/build_time_checkerboard_compute_shader.dxil"
     ));
-    const CHECKERBOARD_IMAGE_WIDTH: u32 = 8;
-    const CHECKERBOARD_IMAGE_HEIGHT: u32 = 8;
     const CHECKERBOARD_PIXEL_SIZE: usize = 4;
+    const STRUCTURED_BUFFER_STRIDE: u32 = 4;
+
+    struct GpuResource {
+        resource: ID3D12Resource,
+        definition: ResourceDefinition,
+    }
+
+    struct ExecutedComputeGraph {
+        device: ID3D12Device,
+        plan: ExecutionPlan,
+        resources: BTreeMap<String, GpuResource>,
+    }
 
     struct WarpDevice {
         adapter_name: String,
@@ -217,6 +242,10 @@ mod dx12 {
         BUILD_TIME_CHECKERBOARD_COMPUTE_SHADER_DXIL
     }
 
+    pub fn plan_compute_graph(config_toml: &str) -> Result<ExecutionPlan> {
+        ExecutionPlan::from_toml(config_toml).map_err(|error| Error::new(E_FAIL, error.to_string()))
+    }
+
     pub fn compile_runtime_compute_shader() -> Result<Vec<u8>> {
         compile_compute_shader(COMPUTE_SHADER_SOURCE, COMPUTE_SHADER_SOURCE_NAME)
     }
@@ -233,27 +262,43 @@ mod dx12 {
         create_compute_pipeline_state_for_device(&device, compiled_shader)
     }
 
-    pub fn dispatch_checkerboard_shader(compiled_shader: &[u8]) -> Result<Vec<u8>> {
-        let device = create_warp_device()?.device;
-        let root_signature = create_dynamic_resource_root_signature(&device)?;
-        let pipeline_state = create_compute_pipeline_state_for_device(&device, compiled_shader)?;
-        let descriptor_heap = create_shader_visible_uav_heap(&device)?;
-        let texture = create_checkerboard_texture(&device)?;
-        let cpu_handle = unsafe { descriptor_heap.GetCPUDescriptorHandleForHeapStart() };
-
-        unsafe {
-            device.CreateUnorderedAccessView(Some(&texture), None, None, cpu_handle);
-        }
-
-        let texture_desc = unsafe { texture.GetDesc() };
+    pub fn dispatch_configured_compute_graph(
+        config_toml: &str,
+        output_image: &str,
+    ) -> Result<(ExecutionPlan, Vec<u8>)> {
+        let plan = plan_compute_graph(config_toml)?;
+        let executed_graph = execute_compute_graph(plan)?;
+        let output_resource = executed_graph.resources.get(output_image).ok_or_else(|| {
+            Error::new(
+                E_FAIL,
+                format!("configured compute graph does not define image resource '{output_image}'"),
+            )
+        })?;
+        let texture = match &output_resource.definition {
+            ResourceDefinition::Image(_) => &output_resource.resource,
+            ResourceDefinition::Buffer(_) => {
+                return Err(Error::new(
+                    E_FAIL,
+                    format!(
+                        "resource '{output_image}' is a buffer and cannot be read back as an image"
+                    ),
+                ));
+            }
+        };
+        let image_desc = unsafe { texture.GetDesc() };
         let mut placed_footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
         let mut num_rows = 0;
         let mut row_size_in_bytes = 0;
         let mut total_bytes = 0;
+        let image_dimensions = match &output_resource.definition {
+            ResourceDefinition::Image(image) => (image.width as usize, image.height as usize),
+            ResourceDefinition::Buffer(_) => unreachable!(),
+        };
 
+        let device = executed_graph.device.clone();
         unsafe {
             device.GetCopyableFootprints(
-                &texture_desc,
+                &image_desc,
                 0,
                 1,
                 0,
@@ -269,23 +314,28 @@ mod dx12 {
         let command_allocator = create_command_allocator(&device)?;
         let command_list = create_command_list(&device, &command_allocator)?;
         let fence = create_fence(&device)?;
-        let descriptor_heaps = [Some(descriptor_heap.clone())];
+
+        let final_state = *executed_graph
+            .plan
+            .final_resource_states
+            .get(output_image)
+            .ok_or_else(|| {
+                Error::new(
+                    E_FAIL,
+                    format!("configured compute graph never uses output image '{output_image}'"),
+                )
+            })?;
 
         unsafe {
-            command_list.SetDescriptorHeaps(&descriptor_heaps);
-            command_list.SetComputeRootSignature(&root_signature);
-            command_list.SetPipelineState(&pipeline_state);
-            command_list.Dispatch(1, 1, 1);
-
-            let transition_barriers = [transition_resource_barrier(
-                &texture,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            let mut barriers = [planned_transition_resource_barrier(
+                texture,
+                final_state,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
             )];
-            command_list.ResourceBarrier(&transition_barriers);
+            submit_resource_barriers(&command_list, &mut barriers);
 
             let mut destination = placed_texture_copy_location(&readback_buffer, placed_footprint);
-            let mut source = subresource_texture_copy_location(&texture, 0);
+            let mut source = subresource_texture_copy_location(texture, 0);
             command_list.CopyTextureRegion(&destination, 0, 0, 0, &source, None);
             ManuallyDrop::drop(&mut destination.pResource);
             ManuallyDrop::drop(&mut source.pResource);
@@ -298,12 +348,372 @@ mod dx12 {
         }
 
         wait_for_fence(&fence, 1)?;
-        readback_texture(
+        let pixels = readback_texture(
             &readback_buffer,
             &placed_footprint,
-            CHECKERBOARD_IMAGE_WIDTH as usize,
-            CHECKERBOARD_IMAGE_HEIGHT as usize,
-        )
+            image_dimensions.0,
+            image_dimensions.1,
+        )?;
+        Ok((executed_graph.plan, pixels))
+    }
+
+    fn execute_compute_graph(plan: ExecutionPlan) -> Result<ExecutedComputeGraph> {
+        let device = create_warp_device()?.device;
+        let root_signature = create_dynamic_resource_root_signature(&device)?;
+        let descriptor_heap =
+            create_shader_visible_uav_heap(&device, plan.descriptor_count().max(1))?;
+        let resources = create_graph_resources(&device, &plan)?;
+        let pipeline_states = create_compute_pipeline_states(&device, &plan)?;
+        let command_queue = create_command_queue(&device)?;
+        let command_allocator = create_command_allocator(&device)?;
+        let command_list = create_command_list(&device, &command_allocator)?;
+        let fence = create_fence(&device)?;
+        let descriptor_heaps = [Some(descriptor_heap.clone())];
+
+        unsafe {
+            command_list.SetDescriptorHeaps(&descriptor_heaps);
+            command_list.SetComputeRootSignature(&root_signature);
+
+            for node in &plan.nodes {
+                update_compute_node_descriptors(&device, &descriptor_heap, &resources, node)?;
+
+                let mut barriers = node
+                    .barriers_before
+                    .iter()
+                    .map(|barrier| planned_barrier_to_dx12(barrier, &resources))
+                    .collect::<Result<Vec<_>>>()?;
+                submit_resource_barriers(&command_list, &mut barriers);
+
+                let pipeline_state = pipeline_states.get(&node.shader).ok_or_else(|| {
+                    Error::new(
+                        E_FAIL,
+                        format!(
+                            "missing pipeline state for compute shader '{}'",
+                            node.shader
+                        ),
+                    )
+                })?;
+                command_list.SetPipelineState(pipeline_state);
+                command_list.Dispatch(node.dispatch[0], node.dispatch[1], node.dispatch[2]);
+            }
+
+            command_list.Close()?;
+
+            let command_lists = [Some(command_list.cast::<ID3D12CommandList>()?)];
+            command_queue.ExecuteCommandLists(&command_lists);
+            command_queue.Signal(&fence, 1)?;
+        }
+
+        wait_for_fence(&fence, 1)?;
+        Ok(ExecutedComputeGraph {
+            device,
+            plan,
+            resources,
+        })
+    }
+
+    fn create_compute_pipeline_states(
+        device: &ID3D12Device,
+        plan: &ExecutionPlan,
+    ) -> Result<BTreeMap<String, ID3D12PipelineState>> {
+        let mut pipeline_states = BTreeMap::new();
+
+        for node in &plan.nodes {
+            if pipeline_states.contains_key(&node.shader) {
+                continue;
+            }
+
+            let shader = embedded_compute_shader(&node.shader).ok_or_else(|| {
+                Error::new(
+                    E_FAIL,
+                    format!("unknown embedded compute shader '{}'", node.shader),
+                )
+            })?;
+            let pipeline_state = create_compute_pipeline_state_for_device(device, shader)?;
+            pipeline_states.insert(node.shader.clone(), pipeline_state);
+        }
+
+        Ok(pipeline_states)
+    }
+
+    fn create_graph_resources(
+        device: &ID3D12Device,
+        plan: &ExecutionPlan,
+    ) -> Result<BTreeMap<String, GpuResource>> {
+        plan.resources
+            .iter()
+            .map(|(name, definition)| {
+                let initial_state = plan
+                    .initial_resource_states
+                    .get(name)
+                    .copied()
+                    .unwrap_or(PlannedResourceState::UnorderedAccess);
+                let resource = create_graph_resource(device, definition, initial_state)?;
+                Ok((
+                    name.clone(),
+                    GpuResource {
+                        resource,
+                        definition: definition.clone(),
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    fn create_graph_resource(
+        device: &ID3D12Device,
+        definition: &ResourceDefinition,
+        initial_state: PlannedResourceState,
+    ) -> Result<ID3D12Resource> {
+        match definition {
+            ResourceDefinition::Image(image) => {
+                let texture_desc = D3D12_RESOURCE_DESC {
+                    Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+                    Width: image.width as u64,
+                    Height: image.height,
+                    DepthOrArraySize: 1,
+                    MipLevels: 1,
+                    Format: dxgi_format_for_image(image.format),
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+                    Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                    ..Default::default()
+                };
+
+                let mut texture = None;
+                unsafe {
+                    device.CreateCommittedResource(
+                        &default_heap_properties(D3D12_HEAP_TYPE_DEFAULT),
+                        D3D12_HEAP_FLAG_NONE,
+                        &texture_desc,
+                        planned_state_to_dx12(initial_state),
+                        None,
+                        &mut texture,
+                    )?;
+                }
+                Ok(texture.expect("CreateCommittedResource returned no texture"))
+            }
+            ResourceDefinition::Buffer(buffer) => {
+                if buffer.size_in_bytes == 0 {
+                    return Err(Error::new(
+                        E_FAIL,
+                        format!("buffer '{}' must be larger than zero bytes", buffer.name),
+                    ));
+                }
+
+                let buffer_desc = D3D12_RESOURCE_DESC {
+                    Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+                    Width: buffer.size_in_bytes,
+                    Height: 1,
+                    DepthOrArraySize: 1,
+                    MipLevels: 1,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                    Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                    ..Default::default()
+                };
+
+                let mut resource = None;
+                unsafe {
+                    device.CreateCommittedResource(
+                        &default_heap_properties(D3D12_HEAP_TYPE_DEFAULT),
+                        D3D12_HEAP_FLAG_NONE,
+                        &buffer_desc,
+                        planned_state_to_dx12(initial_state),
+                        None,
+                        &mut resource,
+                    )?;
+                }
+                Ok(resource.expect("CreateCommittedResource returned no buffer"))
+            }
+        }
+    }
+
+    fn update_compute_node_descriptors(
+        device: &ID3D12Device,
+        descriptor_heap: &ID3D12DescriptorHeap,
+        resources: &BTreeMap<String, GpuResource>,
+        node: &crate::graph_config::PlannedComputeNode,
+    ) -> Result<()> {
+        let increment = unsafe {
+            device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+        } as usize;
+        let heap_start = unsafe { descriptor_heap.GetCPUDescriptorHandleForHeapStart() };
+
+        for binding in &node.bindings {
+            let handle = descriptor_handle_at(heap_start, binding.slot as usize, increment);
+            let resource = resources.get(&binding.resource).ok_or_else(|| {
+                Error::new(
+                    E_FAIL,
+                    format!("missing GPU resource '{}'", binding.resource),
+                )
+            })?;
+
+            match &resource.definition {
+                ResourceDefinition::Image(image) => match binding.access {
+                    crate::graph_config::ResourceAccess::Read => unsafe {
+                        let view_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
+                            Format: dxgi_format_for_image(image.format),
+                            ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
+                            Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                            Anonymous: Default::default(),
+                        };
+                        let mut view_desc = view_desc;
+                        view_desc.Anonymous.Texture2D = D3D12_TEX2D_SRV {
+                            MostDetailedMip: 0,
+                            MipLevels: 1,
+                            PlaneSlice: 0,
+                            ResourceMinLODClamp: 0.0,
+                        };
+                        device.CreateShaderResourceView(
+                            Some(&resource.resource),
+                            Some(&view_desc),
+                            handle,
+                        );
+                    },
+                    crate::graph_config::ResourceAccess::Write
+                    | crate::graph_config::ResourceAccess::ReadWrite => unsafe {
+                        let view_desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
+                            Format: dxgi_format_for_image(image.format),
+                            ViewDimension: D3D12_UAV_DIMENSION_TEXTURE2D,
+                            Anonymous: Default::default(),
+                        };
+                        let mut view_desc = view_desc;
+                        view_desc.Anonymous.Texture2D = D3D12_TEX2D_UAV {
+                            MipSlice: 0,
+                            PlaneSlice: 0,
+                        };
+                        device.CreateUnorderedAccessView(
+                            Some(&resource.resource),
+                            None,
+                            Some(&view_desc),
+                            handle,
+                        );
+                    },
+                },
+                ResourceDefinition::Buffer(buffer) => {
+                    let num_elements =
+                        checked_buffer_element_count(&buffer.name, buffer.size_in_bytes)?;
+                    match binding.access {
+                        crate::graph_config::ResourceAccess::Read => unsafe {
+                            let view_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
+                                Format: DXGI_FORMAT_UNKNOWN,
+                                ViewDimension: D3D12_SRV_DIMENSION_BUFFER,
+                                Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                                Anonymous: Default::default(),
+                            };
+                            let mut view_desc = view_desc;
+                            view_desc.Anonymous.Buffer = D3D12_BUFFER_SRV {
+                                FirstElement: 0,
+                                NumElements: num_elements,
+                                StructureByteStride: STRUCTURED_BUFFER_STRIDE,
+                                Flags: D3D12_BUFFER_SRV_FLAG_NONE,
+                            };
+                            device.CreateShaderResourceView(
+                                Some(&resource.resource),
+                                Some(&view_desc),
+                                handle,
+                            );
+                        },
+                        crate::graph_config::ResourceAccess::Write
+                        | crate::graph_config::ResourceAccess::ReadWrite => unsafe {
+                            let view_desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
+                                Format: DXGI_FORMAT_UNKNOWN,
+                                ViewDimension: D3D12_UAV_DIMENSION_BUFFER,
+                                Anonymous: Default::default(),
+                            };
+                            let mut view_desc = view_desc;
+                            view_desc.Anonymous.Buffer = D3D12_BUFFER_UAV {
+                                FirstElement: 0,
+                                NumElements: num_elements,
+                                StructureByteStride: STRUCTURED_BUFFER_STRIDE,
+                                CounterOffsetInBytes: 0,
+                                Flags: D3D12_BUFFER_UAV_FLAG_NONE,
+                            };
+                            device.CreateUnorderedAccessView(
+                                Some(&resource.resource),
+                                None,
+                                Some(&view_desc),
+                                handle,
+                            );
+                        },
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn planned_barrier_to_dx12(
+        barrier: &PlannedBarrier,
+        resources: &BTreeMap<String, GpuResource>,
+    ) -> Result<D3D12_RESOURCE_BARRIER> {
+        let resource = &resources
+            .get(match barrier {
+                PlannedBarrier::Transition { resource, .. } | PlannedBarrier::Uav { resource } => {
+                    resource
+                }
+            })
+            .ok_or_else(|| Error::new(E_FAIL, "planned barrier references missing resource"))?
+            .resource;
+
+        Ok(match barrier {
+            PlannedBarrier::Transition { before, after, .. } => transition_resource_barrier(
+                resource,
+                planned_state_to_dx12(*before),
+                planned_state_to_dx12(*after),
+            ),
+            PlannedBarrier::Uav { .. } => uav_resource_barrier(resource),
+        })
+    }
+
+    fn embedded_compute_shader(name: &str) -> Option<&'static [u8]> {
+        match name {
+            "simple_compute" | "noop" => Some(build_time_compute_shader()),
+            "checkerboard_compute" => Some(build_time_checkerboard_compute_shader()),
+            _ => None,
+        }
+    }
+
+    fn planned_state_to_dx12(state: PlannedResourceState) -> D3D12_RESOURCE_STATES {
+        match state {
+            PlannedResourceState::ShaderRead => D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            PlannedResourceState::UnorderedAccess => D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        }
+    }
+
+    fn dxgi_format_for_image(
+        format: ImageFormat,
+    ) -> windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT {
+        match format {
+            ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
+        }
+    }
+
+    fn checked_buffer_element_count(name: &str, size_in_bytes: u64) -> Result<u32> {
+        if size_in_bytes % STRUCTURED_BUFFER_STRIDE as u64 != 0 {
+            return Err(Error::new(
+                E_FAIL,
+                format!(
+                    "buffer '{name}' size {size_in_bytes} is not divisible by {STRUCTURED_BUFFER_STRIDE}"
+                ),
+            ));
+        }
+
+        let element_count = size_in_bytes / STRUCTURED_BUFFER_STRIDE as u64;
+        u32::try_from(element_count).map_err(|_| {
+            Error::new(
+                E_FAIL,
+                format!("buffer '{name}' is too large for a structured buffer view"),
+            )
+        })
     }
 
     fn create_warp_device() -> Result<WarpDevice> {
@@ -375,7 +785,9 @@ mod dx12 {
         pipeline_state
     }
 
-    fn create_dynamic_resource_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature> {
+    fn create_dynamic_resource_root_signature(
+        device: &ID3D12Device,
+    ) -> Result<ID3D12RootSignature> {
         let root_signature_desc = D3D12_ROOT_SIGNATURE_DESC {
             Flags: D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
                 | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED,
@@ -398,45 +810,27 @@ mod dx12 {
         unsafe { device.CreateRootSignature(0, root_signature_bytes) }
     }
 
-    fn create_shader_visible_uav_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap> {
+    fn create_shader_visible_uav_heap(
+        device: &ID3D12Device,
+        num_descriptors: u32,
+    ) -> Result<ID3D12DescriptorHeap> {
         let heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
             Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-            NumDescriptors: 1,
+            NumDescriptors: num_descriptors,
             Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
             ..Default::default()
         };
         unsafe { device.CreateDescriptorHeap(&heap_desc) }
     }
 
-    fn create_checkerboard_texture(device: &ID3D12Device) -> Result<ID3D12Resource> {
-        let texture_desc = D3D12_RESOURCE_DESC {
-            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-            Width: CHECKERBOARD_IMAGE_WIDTH as u64,
-            Height: CHECKERBOARD_IMAGE_HEIGHT,
-            DepthOrArraySize: 1,
-            MipLevels: 1,
-            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
-            Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-            ..Default::default()
-        };
-
-        let mut texture = None;
-        unsafe {
-            device.CreateCommittedResource(
-                &default_heap_properties(D3D12_HEAP_TYPE_DEFAULT),
-                D3D12_HEAP_FLAG_NONE,
-                &texture_desc,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                None,
-                &mut texture,
-            )?;
+    fn descriptor_handle_at(
+        start: windows::Win32::Graphics::Direct3D12::D3D12_CPU_DESCRIPTOR_HANDLE,
+        index: usize,
+        increment: usize,
+    ) -> windows::Win32::Graphics::Direct3D12::D3D12_CPU_DESCRIPTOR_HANDLE {
+        windows::Win32::Graphics::Direct3D12::D3D12_CPU_DESCRIPTOR_HANDLE {
+            ptr: start.ptr + index * increment,
         }
-        Ok(texture.expect("CreateCommittedResource returned no texture"))
     }
 
     fn create_readback_buffer(device: &ID3D12Device, size_in_bytes: u64) -> Result<ID3D12Resource> {
@@ -476,9 +870,7 @@ mod dx12 {
         unsafe { device.CreateCommandQueue(&queue_desc) }
     }
 
-    fn create_command_allocator(
-        device: &ID3D12Device,
-    ) -> Result<ID3D12CommandAllocator> {
+    fn create_command_allocator(device: &ID3D12Device) -> Result<ID3D12CommandAllocator> {
         unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
     }
 
@@ -525,9 +917,8 @@ mod dx12 {
         for row in 0..height {
             let source_offset = row * row_pitch;
             let destination_offset = row * bytes_per_row;
-            let source = unsafe {
-                slice::from_raw_parts(mapped_data.add(source_offset), bytes_per_row)
-            };
+            let source =
+                unsafe { slice::from_raw_parts(mapped_data.add(source_offset), bytes_per_row) };
             pixels[destination_offset..destination_offset + bytes_per_row].copy_from_slice(source);
         }
 
@@ -538,9 +929,7 @@ mod dx12 {
         Ok(pixels)
     }
 
-    fn default_heap_properties(
-        heap_type: D3D12_HEAP_TYPE,
-    ) -> D3D12_HEAP_PROPERTIES {
+    fn default_heap_properties(heap_type: D3D12_HEAP_TYPE) -> D3D12_HEAP_PROPERTIES {
         D3D12_HEAP_PROPERTIES {
             Type: heap_type,
             ..Default::default()
@@ -563,6 +952,39 @@ mod dx12 {
                     Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
                 }),
             },
+        }
+    }
+
+    fn planned_transition_resource_barrier(
+        resource: &ID3D12Resource,
+        state_before: PlannedResourceState,
+        state_after: D3D12_RESOURCE_STATES,
+    ) -> D3D12_RESOURCE_BARRIER {
+        transition_resource_barrier(resource, planned_state_to_dx12(state_before), state_after)
+    }
+
+    fn uav_resource_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
+        D3D12_RESOURCE_BARRIER {
+            Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
+            Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+            Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                UAV: ManuallyDrop::new(D3D12_RESOURCE_UAV_BARRIER {
+                    pResource: ManuallyDrop::new(Some(resource.clone())),
+                }),
+            },
+        }
+    }
+
+    fn submit_resource_barriers(
+        command_list: &ID3D12GraphicsCommandList,
+        barriers: &mut [D3D12_RESOURCE_BARRIER],
+    ) {
+        if barriers.is_empty() {
+            return;
+        }
+
+        unsafe {
+            command_list.ResourceBarrier(barriers);
         }
     }
 
@@ -803,10 +1225,52 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn dispatches_checkerboard_compute_shader() -> windows::core::Result<()> {
-        let pixels = super::dx12::dispatch_checkerboard_shader(
-            super::dx12::build_time_checkerboard_compute_shader(),
-        )?;
+    fn dispatches_checkerboard_compute_shader_from_toml_config() -> windows::core::Result<()> {
+        let config_toml = r#"
+            [[images]]
+            name = "checkerboard_output"
+            width = 8
+            height = 8
+            format = "rgba8_unorm"
+
+            [[buffers]]
+            name = "scratch_buffer"
+            size_in_bytes = 64
+
+            [[compute_nodes]]
+            name = "generate_checkerboard"
+            shader = "checkerboard_compute"
+            dispatch = [1, 1, 1]
+
+            [[compute_nodes.bindings]]
+            resource = "checkerboard_output"
+            slot = 0
+            access = "write"
+
+            [[compute_nodes]]
+            name = "preserve_output"
+            shader = "noop"
+            dispatch = [1, 1, 1]
+
+            [[compute_nodes.bindings]]
+            resource = "checkerboard_output"
+            slot = 0
+            access = "write"
+        "#;
+        let (plan, pixels) =
+            super::dx12::dispatch_configured_compute_graph(config_toml, "checkerboard_output")?;
+
+        assert_eq!(plan.nodes[0].dependencies, Vec::<String>::new());
+        assert_eq!(
+            plan.nodes[1].dependencies,
+            vec!["generate_checkerboard".to_string()]
+        );
+        assert_eq!(
+            plan.nodes[1].barriers_before,
+            vec![crate::graph_config::PlannedBarrier::Uav {
+                resource: "checkerboard_output".to_string(),
+            }]
+        );
 
         for y in 0..8 {
             for x in 0..8 {
