@@ -4,5 +4,6 @@ This repository contains a Rust-based DirectX graphics project for Windows devel
 
 ## Current status
 
-The project is currently bootstrapped as a simple binary crate named `ai-gfx-dev`.
-For now, it prints a hello world message and includes a basic passing test.
+The project currently creates a DX12 WARP device, reports its capabilities, and
+includes tests that verify compute shaders can compile and be used to create
+compute pipeline state objects.

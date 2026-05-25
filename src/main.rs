@@ -1,33 +1,59 @@
+mod dxc_locator;
+
+#[cfg(target_os = "windows")]
+#[link(name = "Advapi32")]
+unsafe extern "system" {}
+
 #[cfg(target_os = "windows")]
 mod dx12 {
-    use std::{fmt, mem::size_of};
-
-    use windows::{
-        Win32::Graphics::{
-            Direct3D::{
-                D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
-                D3D_FEATURE_LEVEL_12_0, D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_2,
-            },
-            Direct3D12::{
-                D3D_HIGHEST_SHADER_MODEL, D3D_SHADER_MODEL, D3D_SHADER_MODEL_5_1,
-                D3D_SHADER_MODEL_6_0, D3D_SHADER_MODEL_6_1, D3D_SHADER_MODEL_6_2,
-                D3D_SHADER_MODEL_6_3, D3D_SHADER_MODEL_6_4, D3D_SHADER_MODEL_6_5,
-                D3D_SHADER_MODEL_6_6, D3D_SHADER_MODEL_6_7, D3D_SHADER_MODEL_6_8,
-                D3D_SHADER_MODEL_6_9, D3D12_FEATURE, D3D12_FEATURE_ARCHITECTURE1,
-                D3D12_FEATURE_D3D12_OPTIONS, D3D12_FEATURE_D3D12_OPTIONS1,
-                D3D12_FEATURE_D3D12_OPTIONS5, D3D12_FEATURE_D3D12_OPTIONS7,
-                D3D12_FEATURE_DATA_ARCHITECTURE1, D3D12_FEATURE_DATA_D3D12_OPTIONS,
-                D3D12_FEATURE_DATA_D3D12_OPTIONS1, D3D12_FEATURE_DATA_D3D12_OPTIONS5,
-                D3D12_FEATURE_DATA_D3D12_OPTIONS7, D3D12_FEATURE_DATA_SHADER_MODEL,
-                D3D12_FEATURE_SHADER_MODEL, D3D12_MESH_SHADER_TIER, D3D12_MESH_SHADER_TIER_1,
-                D3D12_MESH_SHADER_TIER_NOT_SUPPORTED, D3D12_RAYTRACING_TIER,
-                D3D12_RAYTRACING_TIER_1_0, D3D12_RAYTRACING_TIER_1_1,
-                D3D12_RAYTRACING_TIER_NOT_SUPPORTED, D3D12CreateDevice, ID3D12Device,
-            },
-            Dxgi::{CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, IDXGIAdapter4, IDXGIFactory4},
-        },
-        core::Result,
+    use crate::dxc_locator::find_dxc_library;
+    use hassle_rs::Dxc;
+    use std::{
+        fmt,
+        mem::{ManuallyDrop, size_of},
+        slice,
     };
+    use windows::{
+        Win32::{
+            Foundation::E_FAIL,
+            Graphics::{
+                Direct3D::{
+                    D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
+                    D3D_FEATURE_LEVEL_12_0, D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_2,
+                    ID3DBlob,
+                },
+                Direct3D12::{
+                    D3D_HIGHEST_SHADER_MODEL, D3D_ROOT_SIGNATURE_VERSION_1, D3D_SHADER_MODEL,
+                    D3D_SHADER_MODEL_5_1, D3D_SHADER_MODEL_6_0, D3D_SHADER_MODEL_6_1,
+                    D3D_SHADER_MODEL_6_2, D3D_SHADER_MODEL_6_3, D3D_SHADER_MODEL_6_4,
+                    D3D_SHADER_MODEL_6_5, D3D_SHADER_MODEL_6_6, D3D_SHADER_MODEL_6_7,
+                    D3D_SHADER_MODEL_6_8, D3D_SHADER_MODEL_6_9, D3D12_COMPUTE_PIPELINE_STATE_DESC,
+                    D3D12_FEATURE, D3D12_FEATURE_ARCHITECTURE1, D3D12_FEATURE_D3D12_OPTIONS,
+                    D3D12_FEATURE_D3D12_OPTIONS1, D3D12_FEATURE_D3D12_OPTIONS5,
+                    D3D12_FEATURE_D3D12_OPTIONS7, D3D12_FEATURE_DATA_ARCHITECTURE1,
+                    D3D12_FEATURE_DATA_D3D12_OPTIONS, D3D12_FEATURE_DATA_D3D12_OPTIONS1,
+                    D3D12_FEATURE_DATA_D3D12_OPTIONS5, D3D12_FEATURE_DATA_D3D12_OPTIONS7,
+                    D3D12_FEATURE_DATA_SHADER_MODEL, D3D12_FEATURE_SHADER_MODEL,
+                    D3D12_MESH_SHADER_TIER, D3D12_MESH_SHADER_TIER_1,
+                    D3D12_MESH_SHADER_TIER_NOT_SUPPORTED, D3D12_RAYTRACING_TIER,
+                    D3D12_RAYTRACING_TIER_1_0, D3D12_RAYTRACING_TIER_1_1,
+                    D3D12_RAYTRACING_TIER_NOT_SUPPORTED, D3D12_ROOT_SIGNATURE_DESC,
+                    D3D12_ROOT_SIGNATURE_FLAG_NONE, D3D12_SHADER_BYTECODE, D3D12CreateDevice,
+                    D3D12SerializeRootSignature, ID3D12Device, ID3D12PipelineState,
+                    ID3D12RootSignature,
+                },
+                Dxgi::{
+                    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, IDXGIAdapter4, IDXGIFactory4,
+                },
+            },
+        },
+        core::{Error, Result},
+    };
+
+    const COMPUTE_SHADER_SOURCE_NAME: &str = "shaders/simple_compute.hlsl";
+    const COMPUTE_SHADER_SOURCE: &str = include_str!("../shaders/simple_compute.hlsl");
+    const BUILD_TIME_COMPUTE_SHADER_DXIL: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/build_time_compute_shader.dxil"));
 
     struct WarpDevice {
         adapter_name: String,
@@ -151,6 +177,19 @@ mod dx12 {
         }
     }
 
+    pub fn build_time_compute_shader() -> &'static [u8] {
+        BUILD_TIME_COMPUTE_SHADER_DXIL
+    }
+
+    pub fn compile_runtime_compute_shader() -> Result<Vec<u8>> {
+        compile_compute_shader(COMPUTE_SHADER_SOURCE, COMPUTE_SHADER_SOURCE_NAME)
+    }
+
+    pub fn create_compute_pipeline_state(compiled_shader: &[u8]) -> Result<ID3D12PipelineState> {
+        let device = create_warp_device()?.device;
+        create_compute_pipeline_state_for_device(&device, compiled_shader)
+    }
+
     fn create_warp_device() -> Result<WarpDevice> {
         unsafe {
             let factory: IDXGIFactory4 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))?;
@@ -167,6 +206,86 @@ mod dx12 {
                 device: device.expect("D3D12CreateDevice succeeded without returning a device"),
             })
         }
+    }
+
+    fn compile_compute_shader(shader_source: &str, source_name: &str) -> Result<Vec<u8>> {
+        let dxc_path = map_external_result(find_dxc_library("dxcompiler.dll"))?;
+        let dxc = map_external_result(Dxc::new(Some(dxc_path)))?;
+        let compiler = map_external_result(dxc.create_compiler())?;
+        let library = map_external_result(dxc.create_library())?;
+        let source_blob =
+            map_external_result(library.create_blob_with_encoding_from_str(shader_source))?;
+
+        match compiler.compile(&source_blob, source_name, "main", "cs_6_0", &[], None, &[]) {
+            Ok(result) => {
+                let shader_blob = map_external_result(result.get_result())?;
+                Ok(shader_blob.to_vec())
+            }
+            Err((result, error)) => {
+                let error_message = result
+                    .get_error_buffer()
+                    .ok()
+                    .and_then(|error_blob| library.get_blob_as_string(&error_blob.into()).ok())
+                    .filter(|message| !message.trim().is_empty())
+                    .unwrap_or_else(|| format!("{error:?}"));
+                Err(Error::new(E_FAIL, error_message))
+            }
+        }
+    }
+
+    fn create_compute_pipeline_state_for_device(
+        device: &ID3D12Device,
+        compiled_shader: &[u8],
+    ) -> Result<ID3D12PipelineState> {
+        let root_signature = create_empty_root_signature(device)?;
+        let mut pipeline_state_desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
+            pRootSignature: ManuallyDrop::new(Some(root_signature)),
+            CS: shader_bytecode(compiled_shader),
+            ..Default::default()
+        };
+
+        let pipeline_state = unsafe { device.CreateComputePipelineState(&pipeline_state_desc) };
+        unsafe {
+            ManuallyDrop::drop(&mut pipeline_state_desc.pRootSignature);
+        }
+        pipeline_state
+    }
+
+    fn create_empty_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature> {
+        let root_signature_desc = D3D12_ROOT_SIGNATURE_DESC {
+            Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
+            ..Default::default()
+        };
+        let mut serialized_root_signature = None;
+
+        unsafe {
+            D3D12SerializeRootSignature(
+                &root_signature_desc,
+                D3D_ROOT_SIGNATURE_VERSION_1,
+                &mut serialized_root_signature,
+                None,
+            )?;
+        }
+
+        let serialized_root_signature =
+            serialized_root_signature.expect("root signature serialization returned no blob");
+        let root_signature_bytes = blob_bytes(&serialized_root_signature);
+        unsafe { device.CreateRootSignature(0, root_signature_bytes) }
+    }
+
+    fn blob_bytes(blob: &ID3DBlob) -> &[u8] {
+        unsafe { slice::from_raw_parts(blob.GetBufferPointer().cast(), blob.GetBufferSize()) }
+    }
+
+    fn shader_bytecode(compiled_shader: &[u8]) -> D3D12_SHADER_BYTECODE {
+        D3D12_SHADER_BYTECODE {
+            pShaderBytecode: compiled_shader.as_ptr().cast(),
+            BytecodeLength: compiled_shader.len(),
+        }
+    }
+
+    fn map_external_result<T, E: fmt::Display>(result: std::result::Result<T, E>) -> Result<T> {
+        result.map_err(|error| Error::new(E_FAIL, format!("{error}")))
     }
 
     fn highest_supported_feature_level(adapter: &IDXGIAdapter4) -> Result<D3D_FEATURE_LEVEL> {
@@ -329,6 +448,37 @@ mod tests {
             assert!(capabilities.total_lane_count >= capabilities.wave_lane_count_max);
         }
 
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn compiles_compute_shader_at_build_time() {
+        let compiled_shader = super::dx12::build_time_compute_shader();
+        assert!(!compiled_shader.is_empty());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn compiles_compute_shader_at_runtime() -> windows::core::Result<()> {
+        let compiled_shader = super::dx12::compile_runtime_compute_shader()?;
+        assert!(!compiled_shader.is_empty());
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn creates_compute_pso_from_build_time_shader() -> windows::core::Result<()> {
+        let _pipeline_state =
+            super::dx12::create_compute_pipeline_state(super::dx12::build_time_compute_shader())?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn creates_compute_pso_from_runtime_shader() -> windows::core::Result<()> {
+        let compiled_shader = super::dx12::compile_runtime_compute_shader()?;
+        let _pipeline_state = super::dx12::create_compute_pipeline_state(&compiled_shader)?;
         Ok(())
     }
 
