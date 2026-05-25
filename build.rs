@@ -4,37 +4,58 @@ mod dxc_locator;
 use hassle_rs::Dxc;
 use std::{env, fs, path::PathBuf};
 
-const COMPUTE_SHADER_SOURCE_PATH: &str = "shaders/simple_compute.hlsl";
-const BUILD_TIME_COMPUTE_SHADER_NAME: &str = "build_time_compute_shader.dxil";
+const COMPUTE_SHADER_PROFILE: &str = "cs_6_6";
+
+struct BuildTimeShader {
+    source_path: &'static str,
+    output_name: &'static str,
+}
+
+const BUILD_TIME_SHADERS: &[BuildTimeShader] = &[
+    BuildTimeShader {
+        source_path: "shaders/simple_compute.hlsl",
+        output_name: "build_time_compute_shader.dxil",
+    },
+    BuildTimeShader {
+        source_path: "shaders/checkerboard_compute.hlsl",
+        output_name: "build_time_checkerboard_compute_shader.dxil",
+    },
+];
 
 #[cfg(target_os = "windows")]
 #[link(name = "Advapi32")]
 unsafe extern "system" {}
 
 fn main() {
-    println!("cargo:rerun-if-changed={COMPUTE_SHADER_SOURCE_PATH}");
+    for shader in BUILD_TIME_SHADERS {
+        println!("cargo:rerun-if-changed={}", shader.source_path);
+    }
     println!("cargo:rerun-if-changed=third_party/dxc/bin/x64/dxcompiler.dll");
     println!("cargo:rerun-if-changed=third_party/dxc/bin/x64/dxil.dll");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("cargo did not provide OUT_DIR"));
-    let output_path = out_dir.join(BUILD_TIME_COMPUTE_SHADER_NAME);
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
-        fs::write(output_path, []).expect("failed to write non-Windows placeholder shader");
+        for shader in BUILD_TIME_SHADERS {
+            fs::write(out_dir.join(shader.output_name), [])
+                .expect("failed to write non-Windows placeholder shader");
+        }
         return;
     }
 
     let manifest_dir = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR").expect("cargo did not provide CARGO_MANIFEST_DIR"),
     );
-    let shader_path = manifest_dir.join(COMPUTE_SHADER_SOURCE_PATH);
-    let shader_source = fs::read_to_string(&shader_path)
-        .expect("failed to read compute shader source for build-time compilation");
-    let compiled_shader = compile_compute_shader(&shader_source, COMPUTE_SHADER_SOURCE_PATH)
-        .expect("failed to compile build-time compute shader");
+    for shader in BUILD_TIME_SHADERS {
+        let shader_path = manifest_dir.join(shader.source_path);
+        let shader_source = fs::read_to_string(&shader_path)
+            .expect("failed to read compute shader source for build-time compilation");
+        let compiled_shader = compile_compute_shader(&shader_source, shader.source_path)
+            .expect("failed to compile build-time compute shader");
 
-    fs::write(output_path, compiled_shader)
-        .expect("failed to write build-time compiled compute shader");
+        fs::write(out_dir.join(shader.output_name), compiled_shader)
+            .expect("failed to write build-time compiled compute shader");
+    }
 }
 
 fn compile_compute_shader(shader_source: &str, source_name: &str) -> Result<Vec<u8>, String> {
@@ -47,7 +68,15 @@ fn compile_compute_shader(shader_source: &str, source_name: &str) -> Result<Vec<
         .create_blob_with_encoding_from_str(shader_source)
         .map_err(|error| error.to_string())?;
 
-    match compiler.compile(&source_blob, source_name, "main", "cs_6_0", &[], None, &[]) {
+    match compiler.compile(
+        &source_blob,
+        source_name,
+        "main",
+        COMPUTE_SHADER_PROFILE,
+        &[],
+        None,
+        &[],
+    ) {
         Ok(result) => {
             let shader_blob = result.get_result().map_err(|error| error.to_string())?;
             Ok(shader_blob.to_vec())
