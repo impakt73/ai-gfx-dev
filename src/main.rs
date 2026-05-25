@@ -11,7 +11,7 @@ mod dx12 {
                 D3D12_FEATURE_DATA_D3D12_OPTIONS, D3D12_FEATURE_DATA_D3D12_OPTIONS1,
                 D3D12CreateDevice, ID3D12Device,
             },
-            Dxgi::{CreateDXGIFactory2, IDXGIAdapter4, IDXGIFactory4},
+            Dxgi::{CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, IDXGIAdapter4, IDXGIFactory4},
         },
         core::Result,
     };
@@ -54,10 +54,12 @@ mod dx12 {
 
     pub fn create_warp_device_capabilities() -> Result<WarpDeviceCapabilities> {
         unsafe {
-            let factory: IDXGIFactory4 = CreateDXGIFactory2(0)?;
+            let factory: IDXGIFactory4 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))?;
             let adapter: IDXGIAdapter4 = factory.EnumWarpAdapter()?;
             let descriptor = adapter.GetDesc3()?;
-            let device: ID3D12Device = D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0)?;
+            let mut device: Option<ID3D12Device> = None;
+            D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut device)?;
+            let device = device.expect("D3D12CreateDevice succeeded without returning a device");
 
             let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS::default();
             device.CheckFeatureSupport(
